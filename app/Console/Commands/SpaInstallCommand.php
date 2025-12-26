@@ -7,45 +7,247 @@ use Illuminate\Support\Facades\File;
 
 class SpaInstallCommand extends Command
 {
-    protected $signature = 'spa:install 
-        {--with-product : Install the Product CRUD module}
-        {--force : Overwrite existing files}';
-
-    protected $description = 'Professional Scaffolder with API/Auth Service separation';
+    protected $signature = 'spa:install';
+    protected $description = 'Install SPA scaffolding with Laravel Mix + Vue 2 + Tailwind';
 
     public function handle()
     {
-        $this->info('🚀 Starting SPA Scaffold Engine...');
 
-        $this->updateNodePackages();
+        $this->configureEnv();
+        $this->ensureNodeVersion();
+        $this->createWebpackMix();
+        $this->ensureMixScripts();
+        $this->installNpmPackages();
+        $this->createVueAssets();
+        $this->createTailwindConfig();
+
         $this->configureSanctum();
         $this->configureKernel();
         $this->configureCors();
-        $this->configureEnv();
         $this->scaffoldVueBase();
 
-        if ($this->option('with-product')) {
-            $this->installProductModule();
-        }
-
-        $this->newLine();
-        $this->info('✅ Setup Complete!');
-        $this->warn('👉 Run: npm install && npm run dev');
+        $this->info('SPA installed successfully with Laravel Mix + Vue 2!');
+        $this->info('Run: npm run watch');
     }
 
-    protected function updateNodePackages()
+    protected function configureEnv()
     {
-        $this->info('📦 Updating package.json...');
-        $path = base_path('package.json');
-        $packages = json_decode(File::get($path), true);
+        $path = base_path('.env');
+        if (!file_exists($path)) {
+            copy(base_path('.env.example'), $path);
+            $this->info('.env file created from .env.example');
+        }
 
-        $packages['dependencies'] = array_merge($packages['dependencies'] ?? [], [
-            'vue' => '^2.6.14',
-            'vue-router' => '^3.5.3',
-            'axios' => '^1.3.0',
-        ]);
+        $content = File::get($path);
+        if (!str_contains($content, 'SANCTUM_STATEFUL_DOMAINS')) {
+            $envData = "\nSANCTUM_STATEFUL_DOMAINS=127.0.0.1,localhost\nSESSION_DOMAIN=127.0.0.1\n";
+            File::append($path, $envData);
+        }
+    }
 
-        File::put($path, json_encode($packages, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+    protected function ensureNodeVersion()
+    {
+        exec('node -v', $output, $code);
+        if ($code !== 0) {
+            throw new \RuntimeException('Node.js is not installed.');
+        }
+
+        $version = ltrim($output[0], 'v');
+        if (version_compare($version, '12.0.0', '<')) {
+            $this->error('Node.js 12+ is required. Current: ' . $version);
+            $this->line('Please install a compatible Node version using nvm.');
+            exit(1);
+        }
+    }
+
+    protected function createWebpackMix()
+    {
+        $mixPath = base_path('webpack.mix.js');
+
+        if (!file_exists($mixPath)) {
+            $content = <<<EOT
+const mix = require('laravel-mix');
+
+mix.js('resources/js/app.js', 'public/js')
+    .vue({ version: 2 })
+    .postCss('resources/css/app.css', 'public/css', [
+        require('tailwindcss'),
+        require('autoprefixer'),
+    ]);
+
+mix.browserSync('127.0.0.1:8000');
+EOT;
+
+            file_put_contents($mixPath, $content);
+            $this->info('webpack.mix.js created with Vue 2 + Tailwind CSS.');
+        } else {
+            $this->info('webpack.mix.js already exists.');
+        }
+    }
+
+    protected function ensureMixScripts()
+    {
+        $packageJsonPath = base_path('package.json');
+        $package = [];
+
+        if (file_exists($packageJsonPath)) {
+            $package = json_decode(file_get_contents($packageJsonPath), true);
+        }
+
+        $package['scripts'] ??= [];
+
+        $package['scripts']['dev']         = "npm run development";
+        $package['scripts']['development'] = "mix";
+        $package['scripts']['watch']       = "mix watch";
+        $package['scripts']['watch-poll']  = "mix watch -- --watch-options-poll=1000";
+        $package['scripts']['hot']         = "mix watch --hot";
+        $package['scripts']['prod']        = "npm run production";
+        $package['scripts']['production']  = "mix --production";
+
+        file_put_contents(
+            $packageJsonPath,
+            json_encode($package, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+        );
+
+        $this->info('Laravel Mix NPM scripts set in package.json.');
+    }
+
+    protected function installNpmPackages()
+    {
+        $this->info('Installing NPM dependencies for Laravel Mix + Vue 2...');
+        exec('npm install vue@2 vue-router@3 laravel-mix cross-env axios tailwindcss autoprefixer --save-dev', $output, $code);
+
+        if ($code !== 0) {
+            throw new \RuntimeException('NPM install failed.');
+        }
+
+        $this->info('NPM dependencies installed successfully.');
+    }
+
+    protected function createVueAssets()
+    {
+        $jsPath = resource_path('js');
+        $cssPath = resource_path('css');
+
+        File::ensureDirectoryExists($jsPath);
+        File::ensureDirectoryExists($cssPath);
+
+        // Create app.css with Tailwind content if it doesn't exist
+        $appCssPath = $cssPath . '/app.css';
+        if (!file_exists($appCssPath)) {
+            file_put_contents($appCssPath, "@tailwind base;\n@tailwind components;\n@tailwind utilities;\n");
+            $this->info('resources/css/app.css created with Tailwind directives.');
+        }
+
+        // JS setup
+        if (!file_exists($jsPath . '/app.js')) {
+            file_put_contents($jsPath . '/app.js', <<<EOT
+import Vue from 'vue';
+import App from './views/App.vue';
+import router from './router';
+
+new Vue({
+    el: '#app',
+    router,
+    render: h => h(App)
+});
+EOT
+            );
+            $this->info('resources/js/app.js created.');
+        }
+
+        // Create Vue views
+        $viewsPath = $jsPath . '/views';
+        File::ensureDirectoryExists($viewsPath);
+
+        if (!file_exists($viewsPath . '/App.vue')) {
+            file_put_contents($viewsPath . '/App.vue', <<<EOT
+<template>
+  <div id="app">
+    <router-view></router-view>
+  </div>
+</template>
+
+<script>
+export default {
+  name: "App"
+};
+</script>
+
+<style>
+/* Global styles */
+</style>
+EOT
+            );
+            $this->info('resources/js/views/App.vue created.');
+        }
+
+        // Router setup
+        $routerPath = $jsPath . '/router';
+        File::ensureDirectoryExists($routerPath);
+
+        if (!file_exists($routerPath . '/index.js')) {
+            file_put_contents($routerPath . '/index.js', <<<EOT
+import Vue from 'vue';
+import Router from 'vue-router';
+import Home from '../views/Home.vue';
+
+Vue.use(Router);
+
+export default new Router({
+    mode: 'history',
+    routes: [
+        { path: '/', name: 'home', component: Home }
+    ]
+});
+EOT
+            );
+            $this->info('resources/js/router/index.js created.');
+        }
+
+        if (!file_exists($viewsPath . '/Home.vue')) {
+            file_put_contents($viewsPath . '/Home.vue', <<<EOT
+<template>
+  <div>
+    <h1>Welcome to Vue SPA!</h1>
+  </div>
+</template>
+
+<script>
+export default {
+  name: "Home"
+};
+</script>
+EOT
+            );
+            $this->info('resources/js/views/Home.vue created.');
+        }
+    }
+
+    protected function createTailwindConfig()
+    {
+        $path = base_path('tailwind.config.js');
+
+        if (!file_exists($path)) {
+            $content = <<<EOT
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+    content: [
+        "./resources/**/*.blade.php",
+        "./resources/**/*.js",
+        "./resources/**/*.vue",
+    ],
+    theme: {
+        extend: {},
+    },
+    plugins: [],
+}
+EOT;
+            file_put_contents($path, $content);
+            $this->info('tailwind.config.js created.');
+        } else {
+            $this->info('tailwind.config.js already exists.');
+        }
     }
 
     protected function configureSanctum()
@@ -80,17 +282,6 @@ class SpaInstallCommand extends Command
         }
     }
 
-    protected function configureEnv()
-    {
-        $path = base_path('.env');
-        $content = File::get($path);
-
-        if (!str_contains($content, 'SANCTUM_STATEFUL_DOMAINS')) {
-            $envData = "\nSANCTUM_STATEFUL_DOMAINS=127.0.0.1,localhost\nSESSION_DOMAIN=127.0.0.1\n";
-            File::append($path, $envData);
-        }
-    }
-
     protected function scaffoldVueBase()
     {
         $this->info('🖼 Creating Vue Structure...');
@@ -117,30 +308,47 @@ class SpaInstallCommand extends Command
 
         // views/Login.vue (Your Custom Styled Component)
         File::put("$base/views/Login.vue", $this->getLoginVueStub());
+
+
+        $base = resource_path();
+        File::ensureDirectoryExists("$base/views");
+
+        // views/Login.vue (Your Custom Styled Component)
+        File::put("$base/views/app.blade.php", $this->getAppBladeStub());
+
+
+        $base = resource_path('js');
+        File::put("$base/bootstrap.js", $this->bootstrapSub());
     }
 
-    protected function installProductModule()
+    public function bootstrapSub()
     {
-        $this->info('✨ Injecting Product Module...');
-        $this->call('make:model', ['name' => 'Product', '-m' => true]);
+        return <<<EOT
+import axios from 'axios';
 
-        $routerPath = resource_path('js/router/index.js');
-        $routerContent = File::get($routerPath);
-        $productRoute = "{ path: '/products', name: 'products.index', component: () => import('../views/Products.vue') },";
+window.axios = axios;
 
-        if (!str_contains($routerContent, 'products.index')) {
-            $routerContent = str_replace('const routes = [', "const routes = [\n  $productRoute", $routerContent);
-            File::put($routerPath, $routerContent);
-        }
-
-        $apiPath = base_path('routes/api.php');
-        $apiContent = File::get($apiPath);
-        if (!str_contains($apiContent, 'products')) {
-            File::append($apiPath, "\nRoute::middleware('auth:sanctum')->apiResource('products', App\Http\Controllers\Api\ProductController::class);");
-        }
+window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
+EOT;
     }
-
-    // --- STUBS ---
+    public function getAppBladeStub()
+    {
+        return <<<BLADE
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vue SPA Sanctum</title>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <link href="{{ mix('css/app.css') }}" rel="stylesheet">
+</head>
+<body>
+    <div id="app"></div>
+    <script src="{{ mix('js/app.js') }}"></script>
+</body>
+</html>
+BLADE;
+    }
 
     protected function getApiBaseStub() {
         return "import axios from 'axios';\n\nconst api = axios.create({\n  withCredentials: true,\n  headers: {\n    'X-Requested-With': 'XMLHttpRequest',\n    'Accept': 'application/json'\n  }\n});\n\nexport default api;";
