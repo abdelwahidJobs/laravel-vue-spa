@@ -109,9 +109,7 @@ export default {
       this.error = null;
       try {
         await Auth.login(this.form);
-        console.log('Login successful');
-
-        this.$router.push('/products')
+        this.$router.push('/products');
       } catch (err) {
         this.error = "Invalid email or password.";
       } finally {

@@ -1,13 +1,6 @@
-// require('./bootstrap');
+import './bootstrap';
 import Vue from 'vue';
-import App from './views/App.vue';
 import router from './router';
-import Login from "./views/Login.vue";
+import App from './views/App.vue';
 
-Vue.config.productionTip = false;
-Vue.component('Login', Login);
-
-new Vue({
-    router,
-    render: h => h(App),
-}).$mount('#app');
+new Vue({ el: '#app', router, render: h => h(App) });

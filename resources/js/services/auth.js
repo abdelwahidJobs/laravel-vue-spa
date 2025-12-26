@@ -11,7 +11,6 @@ export default {
         return api.get('/api/user');
     },
 
-
     logout() {
         return api.post('/api/logout');
     }
